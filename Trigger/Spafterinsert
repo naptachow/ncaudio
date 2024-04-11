@@ -1,0 +1,741 @@
+USE [DB_23_24]
+GO
+/****** Object:  StoredProcedure [dbo].[Proc_HHDATA]    Script Date: 23/02/2024 08:05:23 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE procedure [dbo].[Proc_HHDATA]
+(
+   @INV_NO		varchar(50)
+  ,@DIV_CODE	varchar(50)
+  ,@RET			VARCHAR(MAX) OUTPUT
+
+)
+as
+BEGIN
+
+IF NOT EXISTS( SELECT INV_NO  FROM INVOICE_HEADER WHERE  INV_NO=@INV_NO and GDCODE=@DIV_CODE AND COMPOSITEKEY='UNUSED')
+BEGIN
+ SET @RET='No records found in INVOICE_HEADER table for the INV No::-- '+@INV_NO
+ -- print @ret
+ RETURN;
+END
+
+IF NOT EXISTS( SELECT INV_NO FROM INVOICE_DETAILS where INV_NO= @INV_NO and COMPOSITEKEY='UNUSED')
+BEGIN
+ SET @RET='No records found in INVOICE_DETAILS table for the INV No::-- '+@INV_NO
+ -- print @ret
+ RETURN;
+END
+
+
+  
+	BEGIN TRY
+			BEGIN TRANSACTION;
+
+			    declare	@OldProcess bit =1
+			   	declare @COMP_CODE				varchar(50);
+				declare @YR_CODE				varchar(50);												
+				set @YR_CODE='2023-2024'
+				
+				declare @BILL_ITEMS				int
+				declare @PAYMENTMODE			varchar(50)
+
+
+				DECLARE	@strDOC_Type			VARCHAR(50);
+				DECLARE @DOC_NO					VARCHAR(400);
+				DECLARE @Origi_DOC_NO			VARCHAR(50);
+				DECLARE @DOC_DT					DATETIME;
+				DECLARE @INV_DT					DATETIME;
+				DECLARE @TOT_ITEM_GRS_AMT		DECIMAL(18,2);
+				DECLARE @BONANGA_DISC			DECIMAL(18,2);
+				DECLARE @NET_AMNT				DECIMAL(18,2);
+				DECLARE @AMT_RECV_BYCASH_ITEM	DECIMAL(18,2);
+				DECLARE @AMT_RECV_BYCARD		DECIMAL(18,2);
+				DECLARE @upi_amnt				DECIMAL(18,2);
+
+				
+				DECLARE @TOTAL_TAX_AMT			DECIMAL(18,2);
+				DECLARE @CASHIER_CODE			VARCHAR(50);
+				DECLARE @MCNO					VARCHAR(50);
+				DECLARE @NET_INV_AMT			DECIMAL(18,2);
+
+				DECLARE @DETALS_ROWCOUNT INT; SET @DETALS_ROWCOUNT=1;
+				DECLARE @DETALS_MAXROWCOUNT INT; SET @DETALS_MAXROWCOUNT=0;
+
+				DECLARE @CONTAINS_REG_ITEM BIT;SET @CONTAINS_REG_ITEM=0;
+
+				DECLARE @SALES_VAT1_AMT DECIMAL(18,2);SET @SALES_VAT1_AMT=0;
+				DECLARE @SALES_VAT2_AMT DECIMAL(18,2);SET @SALES_VAT2_AMT=0;
+				DECLARE @SALES_ZERO_AMT DECIMAL(18,2);SET @SALES_ZERO_AMT=0;
+				DECLARE @VAT1 DECIMAL(18,2);SET @VAT1=0;
+				DECLARE @VAT2 DECIMAL(18,2);SET @VAT2=0;
+				DECLARE @VAT_OTHERS DECIMAL(18,2);SET @VAT_OTHERS=0;
+				DECLARE @TOT_SALES_AMNT DECIMAL(18,2);SET @TOT_SALES_AMNT=0;
+				
+				 declare @_tax_5_cgst_amnt DECIMAL(18,2) set @_tax_5_cgst_amnt= 0; declare @_tax_5_sgst_amnt DECIMAL(18,2) set @_tax_5_sgst_amnt= 0; 
+				 declare @_tax_12_cgst_amnt DECIMAL(18,2) set @_tax_12_cgst_amnt= 0; declare @_tax_12_sgst_amnt DECIMAL(18,2) set @_tax_12_sgst_amnt= 0;
+				 declare @_tax_18_cgst_amnt DECIMAL(18,2) set @_tax_18_cgst_amnt= 0; declare @_tax_18_sgst_amnt DECIMAL(18,2) set @_tax_18_sgst_amnt= 0;
+				 declare @_tax_28_cgst_amnt DECIMAL(18,2) set @_tax_28_cgst_amnt= 0; declare @_tax_28_sgst_amnt DECIMAL(18,2) set @_tax_28_sgst_amnt= 0;
+				
+				 declare @_sales_5_gst DECIMAL(18,2) set @_sales_5_gst= 0;
+				 declare @_sales_12_gst DECIMAL(18,2) set @_sales_12_gst= 0;
+				 declare @_sales_18_gst DECIMAL(18,2) set @_sales_18_gst= 0;
+				 declare @_sales_28_gst DECIMAL(18,2) set @_sales_28_gst= 0;
+								
+			
+				-----------------DETAILS TABLE-------------------------------
+				DECLARE @SM_CODE VARCHAR(50);
+			--	DECLARE @AUTIOD varchar(50); 
+
+
+			
+			  --SELECT @AUTIOD = INSERTED.ID       
+			  --FROM INSERTED
+			  		
+
+			  SELECT @strDOC_Type=DOC_TYPE,@DOC_NO=INV_NO+'/'+CONVERT(VARCHAR(100),NEWID()) ,@COMP_CODE=CDCODE,@DIV_CODE=GDCODE,
+
+			  @Origi_DOC_NO=INV_NO,
+			  @DOC_DT=CONVERT(DATETIME, (SUBSTRING(INV_DATE,4,2)+'/'+SUBSTRING(INV_DATE,1,2)+'/'+SUBSTRING(INV_DATE,7,2)))+INV_TIME,
+			  @INV_DT=CONVERT(DATETIME, (SUBSTRING(INV_DATE,4,2)+'/'+SUBSTRING(INV_DATE,1,2)+'/'+SUBSTRING(INV_DATE,7,2))),
+			  @TOT_ITEM_GRS_AMT=INV_GROSS_AMT,
+
+			  @BONANGA_DISC=DISCOUNT,@NET_AMNT=INV_NET_AMT,
+
+			  @AMT_RECV_BYCASH_ITEM =CASE PAYMENT_MODE WHEN 'C' THEN INV_NET_AMT ELSE 0 END,
+			  @AMT_RECV_BYCARD =CASE PAYMENT_MODE WHEN 'R' THEN INV_NET_AMT ELSE 0 END,
+			  @upi_amnt =CASE PAYMENT_MODE WHEN 'U' THEN INV_NET_AMT ELSE 0 END,
+			
+			  @TOTAL_TAX_AMT =TVAT
+			-- ,@CASHIER_CODE=CASHIER_ID,
+			 ,@CASHIER_CODE= CASE WHEN CASHIER_ID LIKE 'CSH%' THEN CASHIER_ID ELSE  'CSH'+CASHIER_ID END,
+			  @MCNO=MAC_NO
+			 ,@NET_INV_AMT=INV_NET_AMT
+			 ,@BILL_ITEMS=NO_ITEM
+			 ,@PAYMENTMODE=CASE PAYMENT_MODE WHEN 'C' THEN 'CASH'  ELSE 'MIXED' END
+			 ,@OldProcess =CASE WHEN CASHIER_ID LIKE 'CSH%' THEN convert(bit,1) ELSE  convert(bit,0) END
+
+			  FROM INVOICE_HEADER WHERE  INV_NO=@INV_NO and GDCODE=@DIV_CODE AND COMPOSITEKEY='UNUSED'
+			  --ID=@AUTIOD
+
+			  
+
+			  if(@OldProcess=0)
+			  begin
+
+				  declare @DOC_PREF varchar(50); declare @DOC_SUFF varchar(50);declare @VALUE varchar(50);
+				  SELECT @DOC_PREF=DOC_PREF,@DOC_SUFF=DOC_SUFF FROM dbo.TBL_M_DOC_NUMBER WHERE DOC_TYPE= 'INP' AND DIV_CODE=@DIV_CODE AND COMP_CODE=@COMP_CODE AND YR_CODE=@YR_CODE and ISDELETED=0 AND ISACTIVE=1
+ 				  SET @VALUE=SUBSTRING(@Origi_DOC_NO,LEN(@DOC_PREF)+2,8)
+				  set @DOC_NO=@DOC_PREF+@VALUE+'/'+@DOC_SUFF+'/'+CONVERT(VARCHAR(100),NEWID())
+
+			 end
+
+
+			  --All data from Details Table-----------------------
+
+			  select			   
+						ROW_NUMBER() OVER (ORDER BY id) AS Id, 
+						SALESMAN_CODE AS SM_CODE
+						,INV_NO
+						,CONVERT(DATETIME, (SUBSTRING(INV_DATE,4,2)+'/'+SUBSTRING(INV_DATE,1,2)+'/'+SUBSTRING(INV_DATE,7,2))) AS INV_DATE
+						,INV_TIME, 
+					    ITEM_SLNO, 
+						ITEM_CODE, 
+						ITEM_SZ,
+						ITEM_QTY,
+						MRP,
+						VAT_PCT,
+						ITEM_AMT,
+						VAT_AMT ,
+						DISC_NAMT,
+						CONVERT(DECIMAL(18,2),(REPLACE(ABS_NAMT,CHAR(10),''))) AS ABS_NAMT
+						,CGST,CGSTAMT
+						,SGST,SGSTAMT
+						,CGST+SGST as taxpct
+						,SN as hsn
+						,SDES as itemdesc						
+
+		    	into #trmptab from INVOICE_DETAILS where INV_NO= @Origi_DOC_NO and MAC_NO=@MCNO and COMPOSITEKEY='UNUSED'
+
+				------end of All data from Details Table
+
+
+		  -----CREATE DETAILS TABLE-------------------------------------------
+
+			CREATE TABLE #TEMPDETTAB
+			(
+				[AutoId] [bigint] IDENTITY(1,1) NOT NULL,
+				[SalesCode] [varchar](50) NULL,
+				[ItemCode] [varchar](50) NULL,
+				[Size] [varchar](50) NULL,
+				[Qty] [INT] NULL,
+				[Srate][decimal](18, 2) NULL,
+				[Prate] [decimal](18, 2) NULL,
+				[Iscombo] BIT NULL,
+				[IsReg] BIT NULL,
+				[Tax_Prnct] [decimal](18, 2) NULL,
+				[TotTax] [decimal](18, 2) NULL,
+				[TotCst] [decimal](18, 2) NULL,
+				[ItemDiscount] [decimal](18, 2) NULL,
+				[NetAmnt] [decimal](18, 2) NULL,
+				[Amnt] [decimal](18, 2) NULL,
+				[NetSalesRate] [decimal](18, 2) NULL,
+				[VatSalesAmnt] [decimal](18, 2) NULL,
+					
+				[hsn_code] [varchar](50) NULL,
+				[gst_tax_pct] [decimal](18, 2) NULL,
+				[gst_tax_amnt] [decimal](18, 2) NULL,
+				[cgst_tax_amnt] [decimal](18, 2) NULL,
+				[sgst_tax_amnt] [decimal](18, 2) NULL,			
+				[gst_sales_tax_amnt] [decimal](18, 2) NULL,
+				[item_desc] [varchar](50) NULL,			
+					
+
+			)
+
+			CREATE TABLE #TEMPACCNTDET
+			(
+				[AutoId] [bigint] IDENTITY(1,1) NOT NULL,
+				[AMOUNT] [decimal](18, 2) NULL,
+				[LG_AC_CODE][varchar](50) NULL,
+				[SUB_LG_AC_CODE] [varchar](50) NULL,						
+
+			)
+
+
+			----END DETAILS TABLE--------------------------------------------
+
+
+
+			SET @DETALS_MAXROWCOUNT=(SELECT COUNT(*) FROM #trmptab)
+			WHILE(@DETALS_ROWCOUNT<=@DETALS_MAXROWCOUNT)
+					BEGIN
+
+					declare @Salescode varchar(50);DECLARE @ITM_CODE varchar(50);DECLARE @ITM_SZ VARCHAR(50);
+					DECLARE @ITM_QTY DECIMAL(18,2);SET @ITM_QTY=0;DECLARE @MRP DECIMAL(18,2);SET @MRP=0
+					DECLARE @ISREGISTERED BIT; SET @ISREGISTERED=0;DECLARE @COMBO BIT; SET @COMBO=0;
+					DECLARE @VAT_PCT DECIMAL(18,2);SET @VAT_PCT=0;DECLARE @VAT_AMNT DECIMAL(18,2);SET @VAT_AMNT=0;
+					DECLARE @ITM_AMNT DECIMAL(18,2);SET @ITM_AMNT=0;  DECLARE @ToTAmntbeforeDisc DECIMAL(18,2);SET @ToTAmntbeforeDisc=0; 
+					DECLARE @Ratio DECIMAL(18,2);SET @Ratio=0; DECLARE @det_ITEM_DISCOUNT DECIMAL(18,2);SET @det_ITEM_DISCOUNT=0; 
+					DECLARE @Item_Amnt_Afterdisc DECIMAL(18,2);SET @Item_Amnt_Afterdisc=0;DECLARE @det_NET_SALES_RATE DECIMAL(18,2);SET @det_NET_SALES_RATE=0;
+					DECLARE @det_NET_VALUE DECIMAL(18,2);SET @det_NET_VALUE=0;DECLARE @vat DECIMAL(18,2);SET @vat=0;
+					DECLARE @det_Sales_Amnt DECIMAL(18,2); SET @det_Sales_Amnt=0;
+
+					declare  @tax_cgst_amnt DECIMAL(18,2); set @tax_cgst_amnt=0; declare @tax_sgst_amnt DECIMAL(18,2);set @tax_sgst_amnt=0;
+					declare @hsn varchar(50);set @hsn=''
+
+					declare  @gst_tax_pct DECIMAL(18,2); set @gst_tax_pct=0;
+					declare  @gst_tax_amnt DECIMAL(18,2); set @gst_tax_amnt=0;
+					declare  @cgst_tax_amnt DECIMAL(18,2); set @cgst_tax_amnt=0;
+					declare  @sgst_tax_amnt DECIMAL(18,2); set @sgst_tax_amnt=0;
+					declare  @gst_sales_tax_amnt DECIMAL(18,2); set @gst_sales_tax_amnt=0;
+					declare  @item_desc varchar(50); set @item_desc='';
+					
+					select	@Salescode=SM_CODE,
+					@ITM_CODE=ITEM_CODE,
+					@ITM_SZ=convert(int,ITEM_SZ),
+					@ITM_QTY=ITEM_QTY
+					,@MRP=MRP,
+					--@VAT_PCT=VAT_PCT,
+					@VAT_PCT=taxpct,
+					@VAT_AMNT=VAT_AMT,
+					@ITM_AMNT=ITEM_AMT
+					,@ToTAmntbeforeDisc=ITEM_AMT
+					,@det_ITEM_DISCOUNT=ITEM_AMT-disc_namt
+					,@Item_Amnt_Afterdisc=DISC_NAMT	
+					,@det_NET_SALES_RATE=case when ITEM_QTY<>0 then 	DISC_NAMT/ITEM_QTY else 0 end
+						
+					,@det_NET_VALUE=DISC_NAMT,@vat=VAT_AMT		
+					,@det_Sales_Amnt=CONVERT(decimal(18,2), ABS_NAMT) 
+					,@tax_cgst_amnt=CGSTAMT
+					,@tax_sgst_amnt=SGSTAMT
+					,@hsn=hsn
+					,@gst_tax_pct=CGST+SGST
+					,@gst_tax_amnt=CGSTAMT+SGSTAMT
+					,@cgst_tax_amnt=CGSTAMT
+					,@sgst_tax_amnt=SGSTAMT
+					,@item_desc=itemdesc
+
+					 from #trmptab where Id=@DETALS_ROWCOUNT
+
+
+					IF(@VAT_PCT=5.00)
+						BEGIN
+
+							set @_tax_5_cgst_amnt=@_tax_5_cgst_amnt+@tax_cgst_amnt;
+							set @_tax_5_sgst_amnt=@_tax_5_sgst_amnt+@tax_sgst_amnt;
+							set @_sales_5_gst=@_sales_5_gst+@det_Sales_Amnt;
+						END 
+
+					IF(@VAT_PCT=12)
+						BEGIN
+							set @_tax_12_cgst_amnt=@_tax_12_cgst_amnt+@tax_cgst_amnt;
+							set @_tax_12_sgst_amnt=@_tax_12_sgst_amnt+@tax_sgst_amnt;
+							set @_sales_12_gst=@_sales_12_gst+@det_Sales_Amnt;
+						END 
+
+					IF(@VAT_PCT=18)
+					BEGIN
+						set @_tax_18_cgst_amnt=@_tax_18_cgst_amnt+@tax_cgst_amnt;
+						set @_tax_18_sgst_amnt=@_tax_18_sgst_amnt+@tax_sgst_amnt;
+						set @_sales_18_gst=@_sales_18_gst+@det_Sales_Amnt;
+					END 
+
+					IF(@VAT_PCT=28)
+					BEGIN
+						set @_tax_28_cgst_amnt=@_tax_28_cgst_amnt+@tax_cgst_amnt;
+						set @_tax_28_sgst_amnt=@_tax_28_sgst_amnt+@tax_sgst_amnt;
+						set @_sales_28_gst=@_sales_28_gst+@det_Sales_Amnt;
+					END 
+
+					--SET @SALES_VAT1_AMT=
+
+					INSERT INTO #TEMPDETTAB 
+
+							VALUES(
+
+								 @Salescode 
+								,@ITM_CODE
+								,@ITM_SZ
+								,@ITM_QTY
+								,@MRP
+								,0 ----PURCHASE RATE
+								,@COMBO
+								,@ISREGISTERED
+								,@VAT_PCT
+								,@vat
+								,0
+								,@det_ITEM_DISCOUNT
+								,@Item_Amnt_Afterdisc
+								,@ToTAmntbeforeDisc
+								,@det_NET_SALES_RATE
+								,@det_Sales_Amnt
+								,@hsn
+								,@gst_tax_pct
+								,@gst_tax_amnt
+								,@cgst_tax_amnt
+								,@sgst_tax_amnt
+								,@det_Sales_Amnt
+								,@item_desc
+
+							)								
+
+						SET @DETALS_ROWCOUNT=@DETALS_ROWCOUNT+1
+					END   
+
+
+			--SET @TOT_SALES_AMNT=@SALES_VAT1_AMT+@SALES_VAT2_AMT+@SALES_ZERO_AMT
+
+			SET @TOT_SALES_AMNT=@_sales_5_gst+@_sales_12_gst+@_sales_18_gst+@_sales_28_gst			
+			DECLARE  @d_TotalTax DECIMAL(18,2);
+
+		--	SET @d_TotalTax=@VAT1+@VAT2+@VAT_OTHERS;
+		SET @d_TotalTax=@_tax_5_sgst_amnt+@_tax_5_cgst_amnt+@_tax_12_sgst_amnt+@_tax_12_cgst_amnt+@_tax_18_sgst_amnt+@_tax_18_cgst_amnt+@_tax_28_sgst_amnt+@_tax_28_cgst_amnt;
+
+			DECLARE @RoundOffAmnt DECIMAL(18,2); SET @RoundOffAmnt=0;
+
+			SET @RoundOffAmnt=@NET_AMNT-@TOT_SALES_AMNT-@d_TotalTax;
+			  		
+			---------------POPULATE ACCOUNT TRANSACTION DETAILS--------------------------
+
+			IF(@AMT_RECV_BYCASH_ITEM<>0)
+			BEGIN
+				INSERT INTO #TEMPACCNTDET
+				VALUES(@AMT_RECV_BYCASH_ITEM,'161','')
+			END 
+
+			IF(@AMT_RECV_BYCARD<>0)
+			BEGIN
+				INSERT INTO #TEMPACCNTDET
+				VALUES(@AMT_RECV_BYCARD,'157','')
+			END 
+
+		----****DIPANKAR/	CHANGE
+			IF(@upi_amnt<>0)
+			BEGIN
+				INSERT INTO #TEMPACCNTDET
+				VALUES(@upi_amnt,'162','')
+			END
+
+			IF(@RoundOffAmnt<>0)
+			BEGIN
+				INSERT INTO #TEMPACCNTDET
+				VALUES(-@RoundOffAmnt,'156','')
+			END 
+
+			---5----------------------
+			IF(@_tax_5_sgst_amnt<>0)--//88	SGST 5% Output
+			BEGIN
+				INSERT INTO #TEMPACCNTDET
+				VALUES(-@_tax_5_sgst_amnt,'088','')
+			END 
+
+			IF(@_tax_5_cgst_amnt<>0) --//091	CGST 5% Output
+			BEGIN
+				INSERT INTO #TEMPACCNTDET
+				VALUES(-@_tax_5_cgst_amnt,'091','')
+			END
+
+			IF(@_sales_5_gst<>0) --058	Sales GST 5%
+			BEGIN
+				INSERT INTO #TEMPACCNTDET
+				VALUES(-@_sales_5_gst,'058','')
+			END
+
+
+			-----12--------------------
+			IF(@_tax_12_sgst_amnt<>0)--//108	SGST 12% Output
+			BEGIN
+				INSERT INTO #TEMPACCNTDET
+				VALUES(-@_tax_12_sgst_amnt,'108','')
+			END 
+
+			IF(@_tax_12_cgst_amnt<>0) --//109	CGST 12% Output
+			BEGIN
+				INSERT INTO #TEMPACCNTDET
+				VALUES(-@_tax_12_cgst_amnt,'109','')
+			END
+
+			IF(@_sales_12_gst<>0) --099	Sales GST 12%	104
+			BEGIN
+				INSERT INTO #TEMPACCNTDET
+				VALUES(-@_sales_12_gst,'099','')
+			END
+			
+			-----18-------------------
+			IF(@_tax_18_sgst_amnt<>0)--//89	SGST 18% Output
+			BEGIN
+				INSERT INTO #TEMPACCNTDET
+				VALUES(-@_tax_18_sgst_amnt,'089','')
+			END 
+
+			IF(@_tax_18_cgst_amnt<>0) --//92	CGST 18% Output
+			BEGIN
+				INSERT INTO #TEMPACCNTDET
+				VALUES(-@_tax_18_cgst_amnt,'092','')
+			END
+
+			IF(@_sales_18_gst<>0) --059	Sales GST 18%
+			BEGIN
+				INSERT INTO #TEMPACCNTDET
+				VALUES(-@_sales_18_gst,'059','')
+			END
+
+			-----28-------------------
+			IF(@_tax_28_sgst_amnt<>0)--///90	SGST 28% Output
+			BEGIN
+				INSERT INTO #TEMPACCNTDET
+				VALUES(-@_tax_28_sgst_amnt,'090','')
+			END 
+
+			IF(@_tax_28_cgst_amnt<>0) --//93	CGST 28% Output
+			BEGIN
+				INSERT INTO #TEMPACCNTDET
+				VALUES(-@_tax_28_cgst_amnt,'093','')
+			END
+
+			IF(@_sales_28_gst<>0) --060	Sales GST 28%
+			BEGIN
+				INSERT INTO #TEMPACCNTDET
+				VALUES(-@_sales_28_gst,'060','')
+			END
+						
+
+			---- END POPULATE ACCOUNT TRANSACTION DETAILS-
+													
+			DECLARE @CR_AMT DECIMAL(18,2);SET  @CR_AMT=0; DECLARE @NO_ENTRIES INT ; SET @NO_ENTRIES=0
+			DECLARE @DR_AMT DECIMAL(18,2);SET  @DR_AMT=0;
+			SET @CR_AMT=(SELECT SUM(AMOUNT) FROM #TEMPACCNTDET WHERE AMOUNT<0)
+			SET @DR_AMT=(SELECT SUM(AMOUNT) FROM #TEMPACCNTDET WHERE AMOUNT>0)
+			SET @NO_ENTRIES=(SELECT COUNT(*) FROM #TEMPACCNTDET)
+			
+
+			---ACCOUNT TRANS HEADER----------------------------------
+
+			 insert into TBL_SALESHDR 
+					 (
+						COMP_CODE
+						,DIV_CODE
+						,YR_CODE
+						,DOC_TYPE
+						,DOC_NO
+						,DOC_DT
+						,SALES_TYPE
+						,CUST_CODE
+						,INV_ITEMS
+						,PAYMENT_MODE
+						,TOT_ITEM_GRS_AMT
+						,OTHERCHARGES
+						,BONANGA_DISC
+						,OTHER_DISC
+						,NET_INV_AMT
+						,AMT_RECV_BYCASH
+						,AMT_RECV_BYCREDITCARD
+						,AMT_RECV_BYSMARTCARD
+						,CREDITCARD_NO
+						,TOTAL_TAX_AMT
+						,CASHIER_CODE
+						,AUTHORIZER_CODE
+								
+						,CUB
+						,DOC
+						,ADVAMNT
+						,MONEYRECPTNO
+
+
+						,SALES_VAT5
+						,SALES_VAT145
+						,VAT4_5
+						,VAT14_5
+						,CONTAINS_REG_ITEM
+						,EXS_AMT_RECV_BYSMARTCARD
+						,NO_OF_SMARTCARD
+						,ROUND_OFF_ITEM_LVL
+						,ROUND_OFF_AMT
+						,SALES_NO_TAX
+						,SALES_OTHER_TAX
+						,VAT_OTHERS
+						,Tot_Qty
+						,HH_REF_NO
+
+						,tax_5_gst_amnt
+						,tax_12_gst_amnt
+						,tax_18_gst_amnt
+						,tax_28_gst_amnt
+						
+						,sales_5_gst
+						,sales_12_gst
+						,sales_18_gst
+						,sales_28_gst
+
+						,cust_state
+						,check_unique_ness	
+						,upi_amnt					
+						
+
+					 )
+			 
+			 VALUES
+					(
+						 @COMP_CODE
+						,@DIV_CODE
+						,@YR_CODE
+						,'INP'
+						,@DOC_NO
+						,@INV_DT---		bill date
+						,'R'
+						,''--		cust code
+						,@BILL_ITEMS
+						,@PAYMENTMODE
+						,@TOT_ITEM_GRS_AMT
+						,0
+						,@BONANGA_DISC
+						,0
+						,@NET_INV_AMT --------Final payable amount in the Invoice.
+							
+						,@AMT_RECV_BYCASH_ITEM-----------------CASH AMNT
+						,@AMT_RECV_BYCARD---------------CREDIT/DEBIT CARD AMNT CARD AMNT--
+						,0				--SMART CARD
+								
+						,''				--CREDIT CARD NO								
+						,@TOTAL_TAX_AMT
+						,@CASHIER_CODE
+						,@CASHIER_CODE --Authorizer Code.
+						,@CASHIER_CODE
+						,@DOC_DT
+						,0
+						,''
+								
+						,@SALES_VAT1_AMT
+						,@SALES_VAT2_AMT
+						,@VAT1
+						,@VAT2
+						,@CONTAINS_REG_ITEM
+						,0
+						,0
+						,@RoundOffAmnt
+						,@RoundOffAmnt
+						,@SALES_ZERO_AMT
+						,0------------------SALES_OTHER_TAX
+						,@VAT_OTHERS
+						,@BILL_ITEMS
+						,@Origi_DOC_NO
+
+						,@_tax_5_cgst_amnt+@_tax_5_sgst_amnt
+						,@_tax_12_cgst_amnt+@_tax_12_sgst_amnt
+						,@_tax_18_cgst_amnt+@_tax_18_sgst_amnt
+						,@_tax_28_cgst_amnt+@_tax_28_sgst_amnt
+
+						,@_sales_5_gst
+						,@_sales_12_gst
+						,@_sales_18_gst
+						,@_sales_28_gst
+						,'19'
+						,@Origi_DOC_NO
+						,@upi_amnt
+
+
+						)
+				
+			INSERT INTO TBL_SALESDTL		
+									(
+									COMP_CODE
+									,DIV_CODE
+									,DOC_TYPE
+									,INVNO
+									,SM_CODE
+									,INVDATE
+									,ITEM_SERIAL
+									,ITEM_CODE
+									,ISCOMBOITEM
+									,IS_REG_ITEM
+									,ITEM_DISCOUNT
+									,SIZE
+									,QTY
+									,PUR_RATE
+									,SALES_RATE
+									,NET_SALES_RATE
+									,AMOUNT
+									,NET_VALUE
+									,TAX_PRCNT			---Actually it will accomodate Tax value.
+									,CASHIER_CODE
+									,CBU
+									,DOC
+									,VAT_PCT
+									,Sales_Amnt
+									---after gst-----------
+									,hsn_code
+									,gst_tax_pct
+									,gst_tax_amnt
+									,cgst_tax_amnt
+									,sgst_tax_amnt
+									,gst_sales_tax_amnt
+									,item_desc
+
+										
+										
+									)
+									SELECT   @COMP_CODE
+											,@DIV_CODE
+											,'INP'
+											,@DOC_NO
+											,SalesCode
+											,@INV_DT----BILL DATE
+											,AutoId
+											,ItemCode
+											,Iscombo
+											,IsReg
+											,ItemDiscount
+											,Size
+											,Qty
+											,'0'---purchase rate----
+											,Srate
+											,NetSalesRate
+											,Amnt-----amount------------
+											,NetAmnt--net amount-----------------
+											,TotTax
+											,@CASHIER_CODE
+											,@CASHIER_CODE
+											,@DOC_DT
+											,Tax_Prnct
+											,0
+											---after gst----------------------
+											,hsn_code
+											,gst_tax_pct
+											,gst_tax_amnt
+											,cgst_tax_amnt
+											,sgst_tax_amnt
+											,gst_sales_tax_amnt
+											,item_desc
+
+
+											FROM #TEMPDETTAB
+
+
+			INSERT INTO TBL_ACCOUNT_TRNS_HDR
+						(
+							COMP_CODE,DIV_CODE,YR_CODE,DOC_TYPE,DOC_NO, DOC_DT,
+							NARRATION,FINALIZED_BY, CBU, DOC,REF_NO,PARTY
+							,DR_AMT,CR_AMT,NO_ENTRIES
+						)
+					VALUES
+						(
+						@COMP_CODE,@DIV_CODE,@YR_CODE,'INP',@DOC_NO,@INV_DT,
+						'',@CASHIER_CODE ,@CASHIER_CODE,@DOC_DT,@DOC_NO,''
+						,@DR_AMT,@CR_AMT,@NO_ENTRIES+1
+						)
+					
+
+			----END ACCOUNT TRANS HEADER--------------
+
+			------------ACCOUNT DETAILS----------------------------------
+
+			INSERT INTO TBL_ACCOUNT_TRNS_DTL				
+						(
+						COMP_CODE, YR_CODE,DIV_CODE,AMOUNT,LG_AC_CODE, SUB_LG_AC_CODE, CBU, DOC,DOC_TYPE,DOC_NO, DOC_DT,REF_NO,CASHIER_LEDGER,ENTRY_SERIAL
+						)
+						SELECT
+						@COMP_CODE, @YR_CODE, @DIV_CODE,AMOUNT,LG_AC_CODE,SUB_LG_AC_CODE, @CASHIER_CODE, @DOC_DT,'INP', @DOC_NO,@DOC_DT,
+						@DOC_NO,@CASHIER_CODE,AutoId
+						FROM #TEMPACCNTDET
+
+			-----------END ACCOUNT DETAILS---------------------------------
+	
+
+
+			CREATE TABLE #temstock(
+							QTY int,
+							ItemCode varchar(50), 
+							Size varchar(50))
+					
+					insert into #temstock			
+
+					select SUM(Qty),ItemCode,Size	
+					 from #TEMPDETTAB
+					group by ItemCode,Size
+
+
+			merge into TBL_M_ITEM_STOCK_BALANCE t
+			using #temstock s
+			on t.ITEM_CODE=s.ItemCode and t.ITEM_SIZE=s.Size and t.comp_code=@COMP_CODE and t.div_code=@DIV_CODE
+
+			when matched then	
+				update  set  t.CUR_BLN_STK_QTY=t.CUR_BLN_STK_QTY-s.Qty,
+							t.YTD_STK_QTY_OUT=t.YTD_STK_QTY_OUT+s.Qty,
+							t.LST_SALEDT=@DOC_DT
+
+			when not matched then 
+			insert (COMP_CODE,DIV_CODE,	ITEM_CODE,ITEM_SIZE,YTD_STK_QTY_OUT,CUR_BLN_STK_QTY,LST_SALEDT)
+			values(@COMP_CODE, @DIV_CODE, s.ItemCode, s.Size, -s.Qty, s.Qty,@DOC_DT);
+							
+							
+			 update INVOICE_DETAILS set COMPOSITEKEY='USED' where INV_NO= @Origi_DOC_NO AND GDCODE=@DIV_CODE and MAC_NO=@MCNO and COMPOSITEKEY='UNUSED'						
+			 update INVOICE_HEADER  set COMPOSITEKEY='USED'  where INV_NO= @Origi_DOC_NO AND  GDCODE=@DIV_CODE and MAC_NO=@MCNO and COMPOSITEKEY='UNUSED'						
+
+
+			 
+			DROP TABLE #temstock
+			DROP TABLE #TEMPDETTAB
+			DROP TABLE #trmptab
+			DROP TABLE #TEMPACCNTDET
+
+
+			
+		 SET @RET='Success'
+		-- print @ret
+		   COMMIT TRANSACTION;
+
+	END TRY
+
+	BEGIN CATCH
+			 SET @RET=ERROR_MESSAGE()
+			--  print @ret
+			ROLLBACK TRANSACTION;
+
+	END CATCH
+	
+
+END
+-----exec Proc_HHDATA 'INV_NO',DIV_CODE',''
